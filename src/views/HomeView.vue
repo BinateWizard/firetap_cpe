@@ -280,7 +280,7 @@ const smokePercentage = computed(() => {
 .app-container {
   max-width: 400px;
   margin: 0 auto;
-  background-color: #f8f9fa;
+  background-color: #ffffff; /* main background: white */
   min-height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }

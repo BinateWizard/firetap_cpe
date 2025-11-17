@@ -69,8 +69,8 @@ const unreadCount = ref(0)
   display: flex;
   justify-content: space-around;
   align-items: center;
-  background: #ffffff;
-  border-top: 1px solid #e5e7eb;
+  background: #f1f5f9; /* nav background: light slate */
+  border-top: 1px solid #e2e8f0;
   border-radius: 12px 12px 0 0;
   box-shadow: 0 -8px 24px rgba(0,0,0,0.12);
   z-index: 999;
@@ -79,7 +79,7 @@ const unreadCount = ref(0)
   display: flex;
   flex-direction: column;
   align-items: center;
-  color: #6b7280;
+  color: #374151; /* darker text for contrast on the tinted background */
   text-decoration: none;
   font-size: 12px;
   padding: 6px 8px;
