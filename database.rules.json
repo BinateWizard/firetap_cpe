@@ -3,9 +3,24 @@
     "devices": {
       "$deviceId": {
         ".read": "auth != null",
-        ".write": "auth != null",
-        ".validate": "newData.hasChildren(['timestamp']) || newData.hasChildren(['lastSeen'])",
-        "readings": {
+        ".write": "true",
+        "sensors": {
+          ".read": "auth != null",
+          ".write": "true"
+        },
+        "alarms": {
+          ".read": "auth != null",
+          ".write": "true"
+        },
+        "help": {
+          ".read": "auth != null",
+          ".write": "true"
+        },
+        "status": {
+          ".read": "auth != null",
+          ".write": "true"
+        },
+        "meta": {
           ".read": "auth != null",
           ".write": "auth != null"
         }
