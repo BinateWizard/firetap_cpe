@@ -101,8 +101,14 @@
         </div>
       </div>
 
+      <InactivityModal
+        v-model:show="showInactivityModal"
+        :device-id="deviceId"
+        @closed="handleInactivityClosed"
+      />
+
       <!-- No Data State (shows modal button) -->
-      <div v-else-if="noData && activeTab === 'overview'" class="no-data-section">
+      <div v-if="noData && activeTab === 'overview'" class="no-data-section">
         <div class="no-data-icon">📡</div>
         <div class="no-data-title">Device Offline</div>
         <div class="no-data-text">{{ deviceName }} is not sending data to Realtime Database.</div>
@@ -496,6 +502,7 @@
 
 <script setup>
 import showMap from "@/components/showMap.vue";
+import InactivityModal from "@/components/InactivityModal.vue";
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useRouter } from "vue-router";
@@ -549,8 +556,11 @@ const statusCards = ref([]);
 const lastUpdated = ref(new Date());
 const showMapModal = ref(false);
 const showOfflineModal = ref(false);
+const showInactivityModal = ref(false);
 const loading = ref(true);
 const noData = ref(false);
+
+let inactivityTimeoutId = null;
 
 // Tab state
 const activeTab = ref('overview');
@@ -679,6 +689,15 @@ function changeTimeRange(range) {
   timeRange.value = range;
   // Re-render charts with new filtered data
   renderCharts();
+}
+
+function handleInactivityClosed() {
+  if (inactivityTimeoutId) {
+    clearTimeout(inactivityTimeoutId);
+  }
+  inactivityTimeoutId = setTimeout(() => {
+    showInactivityModal.value = true;
+  }, 10000);
 }
 
 async function confirmDisconnect() {
@@ -996,6 +1015,13 @@ async function fetchData() {
         latest.value = currentData;
         loading.value = false;
         noData.value = false;
+        showInactivityModal.value = false;
+        if (inactivityTimeoutId) {
+          clearTimeout(inactivityTimeoutId);
+        }
+        inactivityTimeoutId = setTimeout(() => {
+          showInactivityModal.value = true;
+        }, 10000);
         // Clean up any stray JSON blobs possibly injected by cache/extensions
         scrubDebugJSON();
         
@@ -1038,6 +1064,10 @@ async function fetchData() {
         noData.value = true;
         latest.value = null;
         history.value = [];
+        if (inactivityTimeoutId) {
+          clearTimeout(inactivityTimeoutId);
+          inactivityTimeoutId = null;
+        }
       }
     }, (error) => {
       console.error("❌ Error fetching device data:", error);
@@ -1087,6 +1117,10 @@ onUnmounted(() => {
   if (tempChartInstance) tempChartInstance.destroy();
   if (humidityChartInstance) humidityChartInstance.destroy();
   if (smokeChartInstance) smokeChartInstance.destroy();
+  if (inactivityTimeoutId) {
+    clearTimeout(inactivityTimeoutId);
+    inactivityTimeoutId = null;
+  }
 });
 
 // Format helpers

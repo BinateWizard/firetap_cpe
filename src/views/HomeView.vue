@@ -250,6 +250,12 @@
       </div>
     </transition>
 
+    <InactivityModal
+      v-model:show="showInactivityModal"
+      device-id="All devices"
+      @closed="handleInactivityClosed"
+    />
+
     <!-- Location Picker Modal -->
     <LocationPicker 
       v-if="showLocationPicker"
@@ -342,6 +348,7 @@ import { ref as dbRef, onValue, get } from "firebase/database";
 import { db, rtdb, auth } from "@/firebase";
 import { Bell, MapPin, Plus, Inbox, Menu, X, Settings, HelpCircle, Info, Flame, User, LogOut, Printer, AlertTriangle, Droplets, Check } from 'lucide-vue-next';
 import LocationPicker from '@/components/LocationPicker.vue';
+import InactivityModal from '@/components/InactivityModal.vue';
 
 const router = useRouter();
 
@@ -352,6 +359,9 @@ const showAddModal = ref(false);
 const showDeviceIdHelp = ref(false);
 const showAccountModal = ref(false);
 const showLocationPicker = ref(false);
+const showInactivityModal = ref(false);
+
+let inactivityTimeoutId = null;
 
 // User account info
 const userEmail = computed(() => auth.currentUser?.email || 'Unknown');
@@ -500,6 +510,15 @@ async function fetchDevices() {
     deviceList.forEach(device => {
       const deviceDataRef = dbRef(rtdb, `devices/${device.deviceId}`);
       onValue(deviceDataRef, (snapshot) => {
+        // Any live snapshot means we are still receiving data; reset inactivity timer
+        showInactivityModal.value = false;
+        if (inactivityTimeoutId) {
+          clearTimeout(inactivityTimeoutId);
+        }
+        inactivityTimeoutId = setTimeout(() => {
+          showInactivityModal.value = true;
+        }, 10000);
+
         if (snapshot.exists()) {
           const data = snapshot.val();
           const deviceIndex = devices.value.findIndex(d => d.id === device.id);
@@ -686,6 +705,22 @@ async function handleAddDevice() {
 onMounted(() => {
   fetchDevices(); // Real-time listeners are set up inside
 });
+
+onUnmounted(() => {
+  if (inactivityTimeoutId) {
+    clearTimeout(inactivityTimeoutId);
+    inactivityTimeoutId = null;
+  }
+});
+
+function handleInactivityClosed() {
+  if (inactivityTimeoutId) {
+    clearTimeout(inactivityTimeoutId);
+  }
+  inactivityTimeoutId = setTimeout(() => {
+    showInactivityModal.value = true;
+  }, 10000);
+}
 </script>
 
 <style scoped>
