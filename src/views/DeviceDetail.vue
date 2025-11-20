@@ -238,25 +238,25 @@
         <div class="readings-grid">
           <div class="reading-card">
             <div class="reading-icon">🌡️</div>
-            <div class="reading-value">{{ latest.temperature || 'N/A' }}°C</div>
+            <div class="reading-value">{{ (latest && latest.temperature !== undefined) ? latest.temperature + '°C' : 'No readings' }}</div>
             <div class="reading-label">Temperature</div>
           </div>
 
           <div class="reading-card">
             <div class="reading-icon">💧</div>
-            <div class="reading-value">{{ latest.humidity || 'N/A' }}%</div>
+            <div class="reading-value">{{ (latest && latest.humidity !== undefined) ? latest.humidity + '%' : 'No readings' }}</div>
             <div class="reading-label">Humidity</div>
           </div>
 
           <div class="reading-card">
             <div class="reading-icon">💨</div>
-            <div class="reading-value" :style="{ color: getSmokeColor(smokePercentage) }">{{ smokePercentage }}%</div>
+            <div class="reading-value" :style="{ color: (latest && latest.smokeAnalog !== undefined) ? getSmokeColor(smokePercentage) : '#6b7280' }">{{ (latest && latest.smokeAnalog !== undefined) ? smokePercentage + '%' : 'No readings' }}</div>
             <div class="reading-label">Smoke Level</div>
           </div>
 
           <div class="reading-card">
             <div class="reading-icon">🔥</div>
-            <div class="reading-value" :class="latest.gasStatus !== 'normal' ? 'text-alert' : 'text-safe'">{{ latest.gasStatus || 'normal' }}</div>
+            <div class="reading-value" :class="latest && latest.gasStatus && latest.gasStatus !== 'normal' ? 'text-alert' : 'text-safe'">{{ (latest && latest.gasStatus !== undefined) ? (latest.gasStatus || 'normal') : 'No readings' }}</div>
             <div class="reading-label">Gas Status</div>
           </div>
         </div>
@@ -507,9 +507,10 @@ import { ref, onMounted, onUnmounted, computed, nextTick, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useRouter } from "vue-router";
 import { doc, getDoc, deleteDoc } from "firebase/firestore";
-import { ref as dbRef, onValue, query, orderByChild, limitToLast, remove } from "firebase/database";
+import { ref as dbRef, onValue, query, orderByChild, limitToLast, remove } from "firebase/database"; // retained for disconnect/delete only
 import { db, rtdb, auth } from "@/firebase";
 import { stopAllAlerts } from "@/services/alertMonitor";
+import { useDeviceController } from "@/services/deviceController";
 import { 
   Bell, 
   MapPin, 
@@ -550,15 +551,15 @@ const deviceName = ref('Loading...');
 const deviceLocation = ref('');
 const deviceInfo = ref({});
 
-const latest = ref(null);
-const history = ref([]);
-const statusCards = ref([]);
-const lastUpdated = ref(new Date());
+// Device controller encapsulates RTDB listeners & status logic
+const { latest, history, statusCards, loading: ctrlLoading, noData: ctrlNoData, lastUpdated, start: startController, stop: stopController } = useDeviceController(deviceId);
+// Reuse names expected in template
+const loading = ctrlLoading;
+const noData = ctrlNoData;
 const showMapModal = ref(false);
 const showOfflineModal = ref(false);
 const showInactivityModal = ref(false);
-const loading = ref(true);
-const noData = ref(false);
+// replaced by controller refs above
 
 let inactivityTimeoutId = null;
 
@@ -934,193 +935,19 @@ async function fetchDeviceInfo() {
   }
 }
 
-async function fetchData() {
-  loading.value = true;
-  noData.value = false;
-  
-  try {
-    // Listen to live data from Realtime Database at /devices/{deviceId}
-    const deviceDataRef = dbRef(rtdb, `devices/${deviceId.value}`);
-    
-    onValue(deviceDataRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        
-        // Strictly check for boolean true sensor error
-        const sensorErrorFlag = (data.sensorError === true);
-        const sprinklerActiveFlag = (data.sprinklerActive === true);
-        
-        // Read button state from status object (sibling to buttonEvents)
-        const buttonStatus = data.status || {};
-        const buttonState = buttonStatus.state || 'idle';
-        const lastEventType = buttonStatus.lastEventType || '';
-        const lastEventAt = buttonStatus.lastEventAt || '';
-        
-        // Map button state to buttonEvent format (for backward compatibility)
-        let buttonEventState = 'STATE_IDLE';
-        if (buttonState === 'alert') {
-          buttonEventState = 'STATE_ALERT';
-        } else if (buttonState === 'sprinkler') {
-          buttonEventState = 'STATE_SPRINKLER';
-        }
-        
-        // Map buttonEvent to display properties
-        let buttonMessage = '';
-        let isButtonAlert = false;
-        let isButtonSprinkler = false;
-        
-        if (buttonEventState === 'STATE_ALERT') {
-          buttonMessage = 'alert triggered';
-          isButtonAlert = true;
-        } else if (buttonEventState === 'STATE_SPRINKLER') {
-          buttonMessage = 'sprinkler activated';
-          isButtonSprinkler = true;
-        }
-        
-        // Resolve current temperature and humidity, preferring DHT node when present
-        const dhtNode = data.dht || {};
-        let currentTemp = data.temperature;
-        let currentHumidity = data.humidity;
-
-        if (currentTemp === undefined && dhtNode.temperature !== undefined) {
-          currentTemp = dhtNode.temperature;
-        }
-        if (currentHumidity === undefined && dhtNode.humidity !== undefined) {
-          currentHumidity = dhtNode.humidity;
-        }
-
-        // Process current/latest data
-        const currentData = {
-          id: Date.now(),
-          dateTime: lastEventAt
-            ? new Date(lastEventAt)
-            : (data.lastSeen
-              ? new Date(data.lastSeen)
-              : (dhtNode.timestamp
-                ? new Date(dhtNode.timestamp)
-                : (data.timestamp ? new Date(data.timestamp) : new Date()))),
-          smokeAnalog: data.smokeLevel || data.smoke || data.smokeAnalog || 0,
-          gasStatus: data.gasStatus || 'normal',
-          temperature: currentTemp,
-          humidity: currentHumidity,
-          message: buttonMessage || data.message || (sensorErrorFlag ? 'Sensor Error' : ''),
-          sensorError: sensorErrorFlag,
-          sprinklerActive: isButtonSprinkler || sprinklerActiveFlag,
-          buttonEvent: buttonEventState,
-          buttonState: buttonState, // Store raw state for debugging
-          lastType: data.lastType,
-          status: determineStatusFromButton(data, buttonEventState)
-        };
-        
-        latest.value = currentData;
-        loading.value = false;
-        noData.value = false;
-        showInactivityModal.value = false;
-        if (inactivityTimeoutId) {
-          clearTimeout(inactivityTimeoutId);
-        }
-        inactivityTimeoutId = setTimeout(() => {
-          showInactivityModal.value = true;
-        }, 10000);
-        // Clean up any stray JSON blobs possibly injected by cache/extensions
-        scrubDebugJSON();
-        
-        // Build history from readings if available for charts/statistics
-        if (data.readings && typeof data.readings === 'object') {
-          const readingsArray = Object.entries(data.readings)
-            .map(([key, value]) => {
-              const historySensorError = (value.sensorError === true);
-              return {
-                id: key,
-                dateTime: value.lastSeen ? new Date(value.lastSeen) : (value.timestamp ? new Date(value.timestamp) : new Date()),
-                smokeAnalog: value.smokeLevel || value.smoke || value.smokeAnalog || 0,
-                gasStatus: value.gasStatus || 'normal',
-                temperature: value.temperature,
-                humidity: value.humidity,
-                message: value.message || (historySensorError ? 'Sensor Error' : ''),
-                sensorError: historySensorError,
-                status: determineStatus(value)
-              };
-            })
-            .sort((a, b) => b.dateTime - a.dateTime)
-            .slice(0, 200);
-          
-          history.value = readingsArray;
-        } else {
-          // If no history, just show current reading for charts
-          history.value = currentData ? [currentData] : [];
-        }
-        
-        scrubDebugJSON();
-        
-        lastUpdated.value = new Date();
-        console.log("✅ Device data updated at:", lastUpdated.value.toLocaleTimeString());
-        
-        // Render charts with updated data
-        renderCharts();
-      } else {
-        console.warn("⚠️ No data found for device:", deviceId.value);
-        loading.value = false;
-        noData.value = true;
-        latest.value = null;
-        history.value = [];
-        if (inactivityTimeoutId) {
-          clearTimeout(inactivityTimeoutId);
-          inactivityTimeoutId = null;
-        }
-      }
-    }, (error) => {
-      console.error("❌ Error fetching device data:", error);
-      loading.value = false;
-      noData.value = true;
-    });
-
-    // Listen to recent status history cards (alerts only, last 5)
-    const statusHistoryRef = query(
-      dbRef(rtdb, `devices/${deviceId.value}/statusHistory`),
-      orderByChild('timestamp'),
-      limitToLast(5)
-    );
-
-    onValue(statusHistoryRef, (snap) => {
-      if (snap.exists()) {
-        const obj = snap.val() || {};
-        const arr = Object.entries(obj).map(([id, v]) => ({
-          id,
-          dateTime: v.timestamp ? new Date(v.timestamp) : new Date(),
-          smokeAnalog: (v.smokeLevel !== undefined) ? v.smokeLevel : 0,
-          gasStatus: v.gasStatus || 'normal',
-          temperature: v.temperature,
-          humidity: v.humidity,
-          message: v.message || 'Alert',
-          sensorError: false,
-          lastType: 'alarm',
-          status: 'Alert'
-        }))
-        .sort((a, b) => b.dateTime - a.dateTime);
-
-        statusCards.value = arr;
-      }
-    });
-  } catch (error) {
-    console.error("❌ Error setting up data listener:", error);
-  }
-}
+// Removed inline fetchData logic in favor of controller
 
 onMounted(() => {
   fetchDeviceInfo();
-  fetchData(); // Sets up real-time listener
+  startController();
 });
 
 onUnmounted(() => {
-  // Cleanup chart instances
   if (tempChartInstance) tempChartInstance.destroy();
-  if (humidityChartInstance) humidityChartInstance.destroy();
+  if (humidityChartInstance) tempChartInstance = null;
   if (smokeChartInstance) smokeChartInstance.destroy();
-  if (inactivityTimeoutId) {
-    clearTimeout(inactivityTimeoutId);
-    inactivityTimeoutId = null;
-  }
+  if (humidityChartInstance) humidityChartInstance = null;
+  stopController();
 });
 
 // Format helpers
