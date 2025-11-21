@@ -125,18 +125,18 @@
       <!-- Status Circle -->
       <div class="status-section" v-if="latest">
         <div class="status-circle" :class="{
-          'safe-circle': !hasFireCondition && !hasSprinklerActive && latest.status === 'Safe',
-          'help-circle': hasFireCondition,
+          'safe-circle': !hasFireCondition && !hasSprinklerActive && !hasSmokeCondition && !hasRecentSmokeAlert && latest.status === 'Safe',
+          'help-circle': hasRecentSmokeAlert && !hasNonSmokeFireCondition && !hasSprinklerActive,
           'sprinkler-circle': hasSprinklerActive,
-          'alert-circle': latest.status === 'Alert' && !hasFireCondition && !hasSprinklerActive
+          'alert-circle': hasNonSmokeFireCondition && !hasSprinklerActive
         }">
           <div class="status-icon-container">
             <!-- High temperature or fire detected -->
-            <Flame v-if="hasHighTempCondition" class="status-bell-icon" />
-            <!-- Fire detected from other causes (smoke/gas/alarm/button) -->
-            <Flame v-else-if="hasFireCondition" class="status-bell-icon" />
+            <Flame v-if="hasHighTempCondition || hasNonSmokeFireCondition" class="status-bell-icon" />
             <!-- Sprinkler active (6s button): Droplets icon -->
             <Droplets v-else-if="hasSprinklerActive" class="status-bell-icon" />
+            <!-- Smoke-only condition: Cloud icon -->
+            <Cloud v-else-if="hasRecentSmokeAlert" class="status-bell-icon" />
             <!-- Safe: Check icon -->
             <Check v-else-if="latest.status === 'Safe'" class="status-bell-icon" />
             <!-- Other alerts: Bell icon -->
@@ -144,26 +144,38 @@
           </div>
         </div>
         <div class="status-label" :class="{
-          'safe-label': !hasFireCondition && !hasSprinklerActive && latest.status === 'Safe',
-          'help-label': hasFireCondition,
+          'safe-label': !hasFireCondition && !hasSprinklerActive && !hasSmokeCondition && !hasRecentSmokeAlert && latest.status === 'Safe',
+          'help-label': hasRecentSmokeAlert && !hasNonSmokeFireCondition && !hasSprinklerActive,
           'sprinkler-label': hasSprinklerActive,
-          'alert-label': latest.status === 'Alert' && !hasFireCondition && !hasSprinklerActive
+          'alert-label': hasNonSmokeFireCondition && !hasSprinklerActive
         }">
           <span v-if="hasSprinklerActive">Sprinkler Active</span>
+          <span v-else-if="hasRecentSmokeAlert">Smoke Detected</span>
           <span v-else-if="hasHighTempCondition">High Temperature</span>
-          <span v-else-if="hasFireCondition">Fire Detected</span>
+          <span v-else-if="hasNonSmokeFireCondition">Fire Detected</span>
           <span v-else>{{ latest.status || 'Safe' }}</span>
         </div>
       </div>
 
-      <!-- Fire Alert (smoke/gas/alarm detected) -->
-      <div v-if="hasFireCondition && !hasSprinklerActive" class="alert-banner">
-        🔥 <strong>Fire/Smoke Detected!</strong><br>
+      <!-- Smoke Alert (smoke-only, including 5s hold) -->
+      <div v-if="hasRecentSmokeAlert && !hasSprinklerActive" class="warning-banner">
+        💨 <strong>Smoke Detected!</strong><br>
+        <span v-if="latest && latest.smokeDetected">Digital smoke sensor reported smoke.</span>
+        <span v-else>High smoke levels detected recently.</span>
+        Press button for ≤1s to reset or activate sprinkler (6s hold).
+        <div class="respond-actions">
+          <button class="respond-btn" @click="handleRespond">🚑 Respond</button>
+        </div>
+      </div>
+
+      <!-- Fire Alert (gas/high temp/alarm/button, excluding smoke-only) -->
+      <div v-if="hasNonSmokeFireCondition && !hasSprinklerActive" class="alert-banner">
+        🔥 <strong>Fire Alert!</strong><br>
         <span v-if="latest.buttonEvent === 'STATE_ALERT'">Emergency alert activated via button (3s hold).</span>
         <span v-else-if="latest.gasStatus === 'detected' || latest.gasStatus === 'critical'">Critical gas levels detected.</span>
         <span v-else-if="latest.lastType === 'alarm'">Alarm has been triggered by sensors.</span>
         <span v-else-if="hasHighTempCondition">High temperature detected. Fire risk is elevated.</span>
-        <span v-else>High smoke levels detected.</span>
+        <span v-else>Fire condition detected. Check device immediately.</span>
         Press button for ≤1s to reset or activate sprinkler (6s hold).
         <div class="respond-actions">
           <button class="respond-btn" @click="handleRespond">🚑 Respond</button>
@@ -644,28 +656,54 @@ const hasHighTempCondition = computed(() => {
   return typeof latest.value.temperature === 'number' && latest.value.temperature >= 30;
 });
 
-// Fire condition: high smoke, gas detected, alarm triggered, button alert, or high temperature
-const hasFireCondition = computed(() => {
+// High smoke condition helper (direct reading: digital flag or high analog)
+const hasSmokeCondition = computed(() => {
   if (!latest.value) return false;
-  
-  // Check for alert button (3s press)
-  if (latest.value.buttonEvent === 'STATE_ALERT') return true;
-  
-  // Check for high smoke levels (>1500 or >60%)
+  // Treat either a digital smokeDetected flag or a high analog value as smoke
+  if (latest.value.smokeDetected === true) return true;
   const smokeValue = latest.value.smokeLevel ?? latest.value.smoke ?? latest.value.smokeAnalog ?? 0;
-  if (typeof smokeValue === 'number' && smokeValue > 1500) return true;
-  
-  // Check for high temperature (>= 30°C)
-  if (hasHighTempCondition.value) return true;
-  
-  // Check for gas detection
+  return typeof smokeValue === 'number' && smokeValue > 1500;
+});
+
+// Keep smoke alert active for 5 seconds after it is detected
+const hasRecentSmokeAlert = ref(false);
+let smokeAlertTimeoutId = null;
+
+watch(hasSmokeCondition, (isSmoke) => {
+  if (isSmoke) {
+    hasRecentSmokeAlert.value = true;
+    if (smokeAlertTimeoutId) {
+      clearTimeout(smokeAlertTimeoutId);
+    }
+    smokeAlertTimeoutId = setTimeout(() => {
+      hasRecentSmokeAlert.value = false;
+      smokeAlertTimeoutId = null;
+    }, 5000);
+  }
+});
+
+// Fire condition: non-smoke causes (gas detected, alarm triggered, button alert, or high temperature)
+// Note: smoke-only is handled separately by hasSmokeCondition / hasRecentSmokeAlert
+const hasFireCondition = computed(() => hasNonSmokeFireCondition.value);
+
+// Fire condition excluding smoke-only (used for dedicated Fire Alert banner)
+const hasNonSmokeFireCondition = computed(() => {
+  if (!latest.value) return false;
+
+  // Button emergency alert is always fire
+  if (latest.value.buttonEvent === 'STATE_ALERT') return true;
+
+  // High temperature without smoke-only condition
+  if (hasHighTempCondition.value && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+
+  // Gas detection without smoke-only condition
   const gasStatus = String(latest.value.gasStatus || '').toLowerCase();
-  if (gasStatus === 'detected' || gasStatus === 'critical') return true;
-  
-  // Check for alarm messages
-  if (latest.value.message === 'alarm has been triggered') return true;
-  if (latest.value.lastType === 'alarm') return true;
-  
+  if ((gasStatus === 'detected' || gasStatus === 'critical') && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+
+  // Alarm messages without smoke-only condition
+  if (latest.value.message === 'alarm has been triggered' && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+  if (latest.value.lastType === 'alarm' && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+
   return false;
 });
 
