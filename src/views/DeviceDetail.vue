@@ -151,12 +151,239 @@
             </div>
           </div>
         </div>
+<<<<<<< HEAD
         <!-- Troubleshooting Modal -->
         <div v-if="showOfflineModal" class="modal-overlay">
           <div class="offline-modal">
             <div class="offline-modal-header">
               <h2>Troubleshooting</h2>
               <button class="close-modal-btn" @click="showOfflineModal = false">&times;</button>
+=======
+      </div>
+
+      <InactivityModal
+        v-model:show="showInactivityModal"
+        :device-id="deviceId"
+        @closed="handleInactivityClosed"
+      />
+
+      <!-- No Data State (shows modal button) -->
+      <div v-if="noData && activeTab === 'overview'" class="no-data-section">
+        <div class="no-data-icon">📡</div>
+        <div class="no-data-title">Device Offline</div>
+        <div class="no-data-text">{{ deviceName }} is not sending data to Realtime Database.</div>
+        <button class="diagnostics-btn" @click="showOfflineModal = true">
+          🔍 View Diagnostics
+        </button>
+      </div>
+
+      <!-- Device Dashboard (when data available) -->
+      <div v-else-if="!noData" :key="deviceId">
+
+      <!-- OVERVIEW TAB -->
+      <div v-if="activeTab === 'overview'">
+      <!-- Status Circle -->
+      <div class="status-section" v-if="latest">
+        <div class="status-circle" :class="{
+          'safe-circle': !hasFireCondition && !hasSprinklerActive && !hasSmokeCondition && !hasRecentSmokeAlert && latest.status === 'Safe',
+          'help-circle': hasRecentSmokeAlert && !hasNonSmokeFireCondition && !hasSprinklerActive,
+          'sprinkler-circle': hasSprinklerActive,
+          'alert-circle': hasNonSmokeFireCondition && !hasSprinklerActive
+        }">
+          <div class="status-icon-container">
+            <!-- High temperature or fire detected -->
+            <Flame v-if="hasHighTempCondition || hasNonSmokeFireCondition" class="status-bell-icon" />
+            <!-- Sprinkler active (6s button): Droplets icon -->
+            <Droplets v-else-if="hasSprinklerActive" class="status-bell-icon" />
+            <!-- Smoke-only condition: Cloud icon -->
+            <Cloud v-else-if="hasRecentSmokeAlert" class="status-bell-icon" />
+            <!-- Safe: Check icon -->
+            <Check v-else-if="latest.status === 'Safe'" class="status-bell-icon" />
+            <!-- Other alerts: Bell icon -->
+            <Bell v-else class="status-bell-icon" />
+          </div>
+        </div>
+        <div class="status-label" :class="{
+          'safe-label': !hasFireCondition && !hasSprinklerActive && !hasSmokeCondition && !hasRecentSmokeAlert && latest.status === 'Safe',
+          'help-label': hasRecentSmokeAlert && !hasNonSmokeFireCondition && !hasSprinklerActive,
+          'sprinkler-label': hasSprinklerActive,
+          'alert-label': hasNonSmokeFireCondition && !hasSprinklerActive
+        }">
+          <span v-if="hasSprinklerActive">Sprinkler Active</span>
+          <span v-else-if="hasRecentSmokeAlert">Smoke Detected</span>
+          <span v-else-if="hasHighTempCondition">High Temperature</span>
+          <span v-else-if="hasNonSmokeFireCondition">Fire Detected</span>
+          <span v-else>{{ latest.status || 'Safe' }}</span>
+        </div>
+      </div>
+
+      <!-- Smoke Alert (smoke-only, including 5s hold) -->
+      <div v-if="hasRecentSmokeAlert && !hasSprinklerActive" class="warning-banner">
+        💨 <strong>Smoke Detected!</strong><br>
+        <span v-if="latest && latest.smokeDetected">Digital smoke sensor reported smoke.</span>
+        <span v-else>High smoke levels detected recently.</span>
+        Press button for ≤1s to reset or activate sprinkler (6s hold).
+        <div class="respond-actions">
+          <button class="respond-btn" @click="handleRespond">🚑 Respond</button>
+        </div>
+      </div>
+
+      <!-- Fire Alert (gas/high temp/alarm/button, excluding smoke-only) -->
+      <div v-if="hasNonSmokeFireCondition && !hasSprinklerActive" class="alert-banner">
+        🔥 <strong>Fire Alert!</strong><br>
+        <span v-if="latest.buttonEvent === 'STATE_ALERT'">Emergency alert activated via button (3s hold).</span>
+        <span v-else-if="latest.gasStatus === 'detected' || latest.gasStatus === 'critical'">Critical gas levels detected.</span>
+        <span v-else-if="latest.lastType === 'alarm'">Alarm has been triggered by sensors.</span>
+        <span v-else-if="hasHighTempCondition">High temperature detected. Fire risk is elevated.</span>
+        <span v-else>Fire condition detected. Check device immediately.</span>
+        Press button for ≤1s to reset or activate sprinkler (6s hold).
+        <div class="respond-actions">
+          <button class="respond-btn" @click="handleRespond">🚑 Respond</button>
+        </div>
+      </div>
+
+      <!-- Sprinkler Active (6s press) -->
+      <div v-if="hasSprinklerActive" class="sprinkler-banner">
+        💦 <strong>Sprinkler System Active!</strong><br>
+        Sprinkler activated via button (6s hold). Press button for ≤1s to reset.
+      </div>
+
+      <!-- Sensor Error Warning -->
+      <div v-if="latest && latest.sensorError === true" class="error-banner">
+        ⚠️ <strong>Sensor Error Detected</strong><br>
+        DHT11 sensor is not responding. Check wiring and power.
+      </div>
+
+      <!-- Alarm Alert -->
+      <div v-if="latest && latest.lastType === 'alarm'" class="alert-banner">
+        🔥 <strong>Alarm Triggered!</strong><br>
+        Device detected critical condition at {{ formatTime(latest.dateTime) }}
+      </div>
+
+      <!-- Gas Alert -->
+      <div v-if="latest && (latest.gasStatus === 'detected' || latest.gasStatus === 'critical')" class="warning-banner">
+        ⚠️ <strong>Gas Detected!</strong><br>
+        Critical gas levels detected. Take immediate action.
+      </div>
+
+      <!-- Time and Date -->
+      <div class="time-section" v-if="latest">
+        <div class="current-time">{{ formatTime(latest.dateTime) }}</div>
+        <div class="current-date">{{ formatDate(latest.dateTime) }}</div>
+      </div>
+
+      <!-- Location -->
+      <div class="location-section" v-if="deviceLocation">
+        <MapPin class="location-icon" />
+        <span class="location-text">{{ deviceLocation }}</span>
+      </div>
+
+      <!-- Smoke & Gas Indicators -->
+      <div class="sensor-section" v-if="latest">
+        <div class="sensor-item">
+          <label>SMOKE LEVEL</label>
+          <div class="smoke-bar-container">
+            <div 
+              class="smoke-bar" 
+              :style="{ width: smokePercentage + '%', backgroundColor: getSmokeColor(smokePercentage) }"
+            ></div>
+            <span class="smoke-value">{{ smokePercentage }}%</span>
+          </div>
+        </div>
+
+        <div class="sensor-item">
+          <label>GAS STATUS</label>
+          <div class="gas-status" :class="{ 'gas-high': latest.gasStatus === 'detected' || latest.gasStatus === 'critical' || latest.gasStatus === 'high' }">
+            <span v-if="latest.gasStatus === 'detected' || latest.gasStatus === 'critical'">⚠️ DETECTED</span>
+            <span v-else-if="latest.gasStatus === 'high'">⚠️ HIGH</span>
+            <span v-else>✅ NORMAL</span>
+          </div>
+        </div>
+      </div>
+
+      <showMap v-if="showMapModal" @close="closeMap" />
+
+      <!-- Current Readings Section -->
+      <div class="current-readings-section" v-if="latest">
+        <h2 class="section-title">📊 CURRENT READINGS</h2>
+        
+        <div class="readings-grid">
+          <div class="reading-card">
+            <div class="reading-icon">🌡️</div>
+            <div class="reading-value">{{ (latest && latest.temperature !== undefined) ? latest.temperature + '°C' : 'No readings' }}</div>
+            <div class="reading-label">Temperature</div>
+          </div>
+
+          <div class="reading-card">
+            <div class="reading-icon">💧</div>
+            <div class="reading-value">{{ (latest && latest.humidity !== undefined) ? latest.humidity + '%' : 'No readings' }}</div>
+            <div class="reading-label">Humidity</div>
+          </div>
+
+          <div class="reading-card">
+            <div class="reading-icon">💨</div>
+            <div class="reading-value" :style="{ color: (latest && latest.smokeAnalog !== undefined) ? getSmokeColor(smokePercentage) : '#6b7280' }">{{ (latest && latest.smokeAnalog !== undefined) ? smokePercentage + '%' : 'No readings' }}</div>
+            <div class="reading-label">Smoke Level</div>
+          </div>
+
+          <div class="reading-card">
+            <div class="reading-icon">🔥</div>
+            <div class="reading-value" :class="latest && latest.gasStatus && latest.gasStatus !== 'normal' ? 'text-alert' : 'text-safe'">{{ (latest && latest.gasStatus !== undefined) ? (latest.gasStatus || 'normal') : 'No readings' }}</div>
+            <div class="reading-label">Gas Status</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="quick-actions" v-if="latest">
+        <button class="action-btn" @click="showMapModal = true">
+          <MapPin :size="20" />
+          View on Map
+        </button>
+        <button class="action-btn" @click="activeTab = 'statistics'">
+          📈 View Statistics
+        </button>
+      </div>
+
+      </div>
+      <!-- END OVERVIEW TAB -->
+
+      <!-- STATISTICS TAB (available even when offline if history exists) -->
+      <div v-if="activeTab === 'statistics'">
+        <!-- Time Range Filter -->
+        <div class="time-range-filter">
+          <button 
+            class="range-btn" 
+            :class="{ active: timeRange === 'week' }"
+            @click="changeTimeRange('week')"
+          >
+            Week
+          </button>
+          <button 
+            class="range-btn" 
+            :class="{ active: timeRange === 'month' }"
+            @click="changeTimeRange('month')"
+          >
+            Month
+          </button>
+          <button 
+            class="range-btn" 
+            :class="{ active: timeRange === 'year' }"
+            @click="changeTimeRange('year')"
+          >
+            Year
+          </button>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-section" v-if="filteredHistory.length > 0">
+          <h2 class="section-title">📊 SENSOR TRENDS ({{ timeRangeLabel }})</h2>
+          
+          <div class="chart-card">
+            <h3 class="chart-title">Temperature (°C)</h3>
+            <div class="chart-container">
+              <canvas ref="tempChart"></canvas>
+>>>>>>> 655ab21dd9b53b87bf3ae2c00bd69e56c111157c
             </div>
             <div class="offline-modal-content">
               <div class="offline-info-card">
@@ -382,28 +609,54 @@ const hasHighTempCondition = computed(() => {
   return typeof latest.value.temperature === 'number' && latest.value.temperature >= 30;
 });
 
-// Fire condition: high smoke, gas detected, alarm triggered, button alert, or high temperature
-const hasFireCondition = computed(() => {
+// High smoke condition helper (direct reading: digital flag or high analog)
+const hasSmokeCondition = computed(() => {
   if (!latest.value) return false;
-  
-  // Check for alert button (3s press)
-  if (latest.value.buttonEvent === 'STATE_ALERT') return true;
-  
-  // Check for high smoke levels (>1500 or >60%)
+  // Treat either a digital smokeDetected flag or a high analog value as smoke
+  if (latest.value.smokeDetected === true) return true;
   const smokeValue = latest.value.smokeLevel ?? latest.value.smoke ?? latest.value.smokeAnalog ?? 0;
-  if (typeof smokeValue === 'number' && smokeValue > 1500) return true;
-  
-  // Check for high temperature (>= 30°C)
-  if (hasHighTempCondition.value) return true;
-  
-  // Check for gas detection
+  return typeof smokeValue === 'number' && smokeValue > 1500;
+});
+
+// Keep smoke alert active for 5 seconds after it is detected
+const hasRecentSmokeAlert = ref(false);
+let smokeAlertTimeoutId = null;
+
+watch(hasSmokeCondition, (isSmoke) => {
+  if (isSmoke) {
+    hasRecentSmokeAlert.value = true;
+    if (smokeAlertTimeoutId) {
+      clearTimeout(smokeAlertTimeoutId);
+    }
+    smokeAlertTimeoutId = setTimeout(() => {
+      hasRecentSmokeAlert.value = false;
+      smokeAlertTimeoutId = null;
+    }, 5000);
+  }
+});
+
+// Fire condition: non-smoke causes (gas detected, alarm triggered, button alert, or high temperature)
+// Note: smoke-only is handled separately by hasSmokeCondition / hasRecentSmokeAlert
+const hasFireCondition = computed(() => hasNonSmokeFireCondition.value);
+
+// Fire condition excluding smoke-only (used for dedicated Fire Alert banner)
+const hasNonSmokeFireCondition = computed(() => {
+  if (!latest.value) return false;
+
+  // Button emergency alert is always fire
+  if (latest.value.buttonEvent === 'STATE_ALERT') return true;
+
+  // High temperature without smoke-only condition
+  if (hasHighTempCondition.value && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+
+  // Gas detection without smoke-only condition
   const gasStatus = String(latest.value.gasStatus || '').toLowerCase();
-  if (gasStatus === 'detected' || gasStatus === 'critical') return true;
-  
-  // Check for alarm messages
-  if (latest.value.message === 'alarm has been triggered') return true;
-  if (latest.value.lastType === 'alarm') return true;
-  
+  if ((gasStatus === 'detected' || gasStatus === 'critical') && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+
+  // Alarm messages without smoke-only condition
+  if (latest.value.message === 'alarm has been triggered' && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+  if (latest.value.lastType === 'alarm' && !hasRecentSmokeAlert.value && !hasSmokeCondition.value) return true;
+
   return false;
 });
 

@@ -363,7 +363,7 @@ const showLocationPicker = ref(false);
 const showInactivityModal = ref(false);
 const inactivityDeviceId = ref('');
 const offlineAck = ref({});
-const OFFLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 let offlineInterval = null;
 
 // User account info
@@ -415,6 +415,27 @@ const addError = ref('');
 const addSuccess = ref(false);
 const showErrorModal = ref(false);
 const errorModalMessage = ref('');
+let globalErrorModalTimer = null;
+
+function startGlobalErrorModalTimer() {
+  clearGlobalErrorModalTimer();
+  globalErrorModalTimer = setTimeout(() => {
+    errorModalMessage.value = 'This is your scheduled 5-minute reminder. Please acknowledge to continue using the app.';
+    showErrorModal.value = true;
+  }, 5 * 60 * 1000);
+}
+
+function clearGlobalErrorModalTimer() {
+  if (globalErrorModalTimer) {
+    clearTimeout(globalErrorModalTimer);
+    globalErrorModalTimer = null;
+  }
+}
+
+function handleGlobalErrorModalOk() {
+  showErrorModal.value = false;
+  startGlobalErrorModalTimer();
+}
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
@@ -520,9 +541,13 @@ async function fetchDevices() {
             // Extract button state from RTDB structure
             const buttonState = data.status?.state || 'idle';
             
+            // Check if device is online (from backend or client-side fallback)
+            const isOnline = checkDeviceOnline(data);
+            
             // Extract status as a clean string
-            devices.value[deviceIndex].status = determineStatus(data);
+            devices.value[deviceIndex].status = determineStatus(data, isOnline);
             devices.value[deviceIndex].buttonState = buttonState; // Store button state
+            devices.value[deviceIndex].isOnline = isOnline; // Store online status
             // Use lastSeen or timestamp for update time
             const timestamp = data.lastSeen || data.timestamp || data.status?.lastEventAt || Date.now();
             const tsDate = new Date(timestamp);
@@ -537,6 +562,7 @@ async function fetchDevices() {
           const deviceIndex = devices.value.findIndex(d => d.id === device.id);
           if (deviceIndex !== -1) {
             devices.value[deviceIndex].status = 'Offline';
+            devices.value[deviceIndex].isOnline = false;
             devices.value[deviceIndex].lastReceived = null;
           }
         }
@@ -554,36 +580,76 @@ async function fetchDevices() {
   }
 }
 
+function checkDeviceOnline(data) {
+  // Priority 1: Check backend-set isOnline field (from Cloud Functions)
+  if (data.isOnline !== undefined) {
+    return data.isOnline;
+  }
+  
+  // Priority 2: Client-side fallback - check lastSeen timestamp
+  const OFFLINE_THRESHOLD = 2 * 60 * 1000; // 2 minutes (same as backend)
+  const lastSeen = data.lastSeen || data.timestamp || (data.status?.lastEventAt) || 0;
+  
+  if (lastSeen === 0) {
+    return false; // No timestamp at all = offline
+  }
+  
+  const now = Date.now();
+  const timeSinceLastSeen = now - lastSeen;
+  
+  return timeSinceLastSeen < OFFLINE_THRESHOLD;
+}
+
 function determineStatus(data) {
   // Always return a string, never an object
   if (!data || typeof data !== 'object') return 'Safe';
-  
-  // Check button state from new RTDB structure (status.state)
+
+  // Backend-triggered buttonEvents (alert/sprinkler) should override offline
+  // Accept both root-level and status.buttonEvents arrays
+  let buttonEvents = [];
+  if (Array.isArray(data.buttonEvents)) {
+    buttonEvents = data.buttonEvents;
+  } else if (data.status && Array.isArray(data.status.buttonEvents)) {
+    buttonEvents = data.status.buttonEvents;
+  }
+  // If any event is 'alert' or 'sprinkler', show as active regardless of readings
+  if (buttonEvents.includes('alert')) return 'Alert';
+  if (buttonEvents.includes('sprinkler')) return 'Sprinkler';
+
+  // Treat device as online if status.state is 'alert' or 'sprinkler', even if no readings
   const buttonState = data.status?.state || 'idle';
+  const forceOnline = buttonState === 'alert' || buttonState === 'sprinkler';
+
+  // Check if device is offline based on lastReceived/lastSeen/timestamp (10 min rule)
+  const now = Date.now();
+  const lastSeen = data.lastReceived || data.lastSeen || data.timestamp || (data.status?.lastEventAt) || 0;
+  let lastSeenMs = 0;
+  if (typeof lastSeen === 'object' && typeof lastSeen.getTime === 'function') {
+    lastSeenMs = lastSeen.getTime();
+  } else if (typeof lastSeen === 'number') {
+    lastSeenMs = lastSeen;
+  } else {
+    lastSeenMs = 0;
+  }
+  const isOnline = forceOnline || (lastSeenMs && (now - lastSeenMs) <= OFFLINE_THRESHOLD_MS);
+  if (!isOnline) {
+    return 'Offline';
+  }
+
+  // Only show Alert/Sprinkler if device is online or forced online
   if (buttonState === 'alert') return 'Alert';
   if (buttonState === 'sprinkler') return 'Sprinkler';
-  
-  // Check for sensor error
+
   if (data.sensorError === true) return 'Alert';
-  
-  // Check lastType field
   if (data.lastType === 'alarm') return 'Alert';
-  
-  // Check for critical gas status - only if explicitly set to these values
   if (data.gasStatus && (data.gasStatus === 'critical' || data.gasStatus === 'detected')) return 'Alert';
-  
-  // Check messages
   if (data.message === 'help requested' || data.message === 'alarm has been triggered') {
     return 'Alert';
   }
-  
-  // Check smoke levels - only if value exists and is high
   if (data.smokeLevel !== undefined || data.smoke !== undefined || data.smokeAnalog !== undefined) {
     const smokeValue = data.smokeLevel || data.smoke || data.smokeAnalog || 0;
     if (typeof smokeValue === 'number' && smokeValue > 1500) return 'Alert';
   }
-  
-  // Fallback to normal
   return 'Safe';
 }
 
@@ -716,6 +782,7 @@ onMounted(() => {
       }
     });
   }, 30000); // every 30s
+  startGlobalErrorModalTimer();
 });
 
 onUnmounted(() => {
@@ -724,6 +791,7 @@ onUnmounted(() => {
     clearInterval(offlineInterval);
     offlineInterval = null;
   }
+  clearGlobalErrorModalTimer();
 });
 
 function handleOfflineAck() {
@@ -755,6 +823,11 @@ const pendingOfflineDeviceId = ref('');
 const pendingOfflineDeviceName = ref('');
 
 async function handleErrorModalOk() {
+  // If this is a global reminder, just close and restart timer
+  if (errorModalMessage.value === 'This is your scheduled 5-minute reminder. Please acknowledge to continue using the app.') {
+    handleGlobalErrorModalOk();
+    return;
+  }
   showErrorModal.value = false;
   if (!pendingOfflineDeviceId.value) return;
   try {
@@ -1490,6 +1563,11 @@ async function handleErrorModalOk() {
 .device-status-badge.alert {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.device-status-badge.offline {
+  background: #e5e7eb;
+  color: #4b5563;
 }
 
 /* Modal Styles */

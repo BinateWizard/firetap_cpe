@@ -13,10 +13,16 @@
           v-for="device in devices" 
           :key="device.deviceId"
           class="device-btn"
-          :class="{ 'alert': device.status === 'Alert' }"
+          :class="{ 
+            'alert': device.status === 'Alert',
+            'offline': device.status === 'Offline'
+          }"
           @click="focusOnDevice(device)"
         >
-          <span class="device-icon">{{ device.status === 'Alert' ? '🔥' : '📍' }}</span>
+          <span class="device-icon">{{ 
+            device.status === 'Alert' ? '🔥' : 
+            (device.status === 'Offline' ? '📡' : '📍') 
+          }}</span>
           <div class="device-info">
             <div class="device-name">{{ device.name }}</div>
             <div class="device-status">{{ device.status }}</div>
@@ -80,12 +86,38 @@ function focusOnDevice(device) {
   }
 }
 
-function determineStatus(data) {
+function checkDeviceOnline(data) {
+  // Priority 1: Check backend-set isOnline field (from Cloud Functions)
+  if (data.isOnline !== undefined) {
+    return data.isOnline;
+  }
+  
+  // Priority 2: Client-side fallback - check lastSeen timestamp
+  const OFFLINE_THRESHOLD = 2 * 60 * 1000; // 2 minutes
+  const lastSeen = data.lastSeen || data.timestamp || 0;
+  
+  if (lastSeen === 0) {
+    return false;
+  }
+  
+  const now = Date.now();
+  const timeSinceLastSeen = now - lastSeen;
+  
+  return timeSinceLastSeen < OFFLINE_THRESHOLD;
+}
+
+function determineStatus(data, isOnline = true) {
+  // Always prioritize offline status
+  if (!isOnline) return 'Offline'
   if (!data) return 'Safe'
   if (data.message === 'help requested' || data.message === 'alarm has been triggered') return 'Alert'
   const smokeValue = data.smokeLevel ?? data.smoke ?? 0
   if (typeof smokeValue === 'number' && smokeValue > 1500) return 'Alert'
-  if (data.status) return data.status
+  if (data.status && typeof data.status === 'string') {
+    const s = data.status.toLowerCase()
+    if (s === 'offline') return 'Offline'
+    if (s === 'alert') return 'Alert'
+  }
   return 'Safe'
 }
 
@@ -121,7 +153,8 @@ async function loadDeviceMarkers() {
           const rtdbRef = dbRef(rtdb, `devices/${deviceId}`)
           onValue(rtdbRef, (rtdbSnapshot) => {
             const liveData = rtdbSnapshot.val()
-            const status = liveData ? determineStatus(liveData) : 'Safe'
+            const isOnline = liveData ? checkDeviceOnline(liveData) : false
+            const status = liveData ? determineStatus(liveData, isOnline) : 'Offline'
             
             addDeviceMarker(deviceId, lat, lng, deviceData.name || deviceId, status)
             
@@ -164,7 +197,8 @@ async function loadDeviceMarkers() {
             console.log(`📍 Device ${deviceId} location from RTDB (legacy):`, lat, lng)
             
             if (!isNaN(lat) && !isNaN(lng)) {
-              const status = determineStatus(liveData)
+              const isOnline = liveData ? checkDeviceOnline(liveData) : false
+              const status = determineStatus(liveData, isOnline)
               addDeviceMarker(deviceId, lat, lng, deviceData.name || deviceId, status)
               
               // Update devices array for the panel
@@ -212,10 +246,12 @@ function addDeviceMarker(deviceId, lat, lng, name, status) {
   }
 
   // Determine marker color based on status
-  const color = status === 'Alert' ? '#dc2626' : '#10b981'
+  const color = status === 'Alert' ? '#dc2626' : (status === 'Offline' ? '#9ca3af' : '#10b981')
   const iconHtml = status === 'Alert' 
     ? '<div class="device-marker alert-marker">🔥</div>'
-    : '<div class="device-marker safe-marker">📍</div>'
+    : (status === 'Offline' 
+      ? '<div class="device-marker offline-marker">📡</div>'
+      : '<div class="device-marker safe-marker">📍</div>')
 
   const deviceIcon = L.divIcon({
     className: 'device-location-marker',
@@ -383,6 +419,11 @@ function scrubDebugJSON() {
   animation: bounce 1s infinite;
 }
 
+.offline-marker {
+  opacity: 0.6;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2)) grayscale(0.3);
+}
+
 .device-popup {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   min-width: 150px;
@@ -476,6 +517,11 @@ function scrubDebugJSON() {
 .device-btn.alert {
   background: #dc2626;
   animation: pulse-alert 2s infinite;
+}
+
+.device-btn.offline {
+  background: #9ca3af;
+  opacity: 0.8;
 }
 
 .device-icon {

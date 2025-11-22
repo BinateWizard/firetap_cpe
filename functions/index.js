@@ -120,3 +120,86 @@ exports.notifyOfflineRegistration = functions.https.onCall(async (data, context)
   });
   return { status: 'ok' };
 });
+
+// Track device online/offline status based on lastSeen timestamp
+// Runs every minute to check all devices
+exports.updateDeviceOnlineStatus = functions.pubsub
+  .schedule('every 1 minutes')
+  .onRun(async (context) => {
+    const now = Date.now();
+    const OFFLINE_THRESHOLD = 2 * 60 * 1000; // 2 minutes
+
+    try {
+      const devicesSnap = await rtdb.ref('/devices').once('value');
+      if (!devicesSnap.exists()) return null;
+
+      const devices = devicesSnap.val();
+      const updates = {};
+
+      for (const [deviceId, deviceData] of Object.entries(devices)) {
+        if (!deviceData || typeof deviceData !== 'object') continue;
+
+        // Skip status history metadata
+        if (deviceId === 'statusHistory') continue;
+
+        // Get the last seen timestamp
+        const lastSeen = deviceData.lastSeen 
+          || deviceData.timestamp 
+          || (deviceData.dht && deviceData.dht.timestamp) 
+          || (deviceData.status && deviceData.status.lastEventAt)
+          || 0;
+
+        const timeSinceLastSeen = now - lastSeen;
+        const isOnline = timeSinceLastSeen < OFFLINE_THRESHOLD;
+
+        // Only update if the status changed or doesn't exist
+        const currentOnlineStatus = deviceData.isOnline;
+        if (currentOnlineStatus !== isOnline) {
+          updates[`/devices/${deviceId}/isOnline`] = isOnline;
+          updates[`/devices/${deviceId}/lastChecked`] = now;
+          console.log(`Device ${deviceId}: ${isOnline ? 'online' : 'offline'} (last seen: ${timeSinceLastSeen}ms ago)`);
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await rtdb.ref().update(updates);
+        console.log(`Updated ${Object.keys(updates).length / 2} devices`);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error updating device online status:', error);
+      return null;
+    }
+  });
+
+// Update isOnline status immediately when device sends data
+exports.markDeviceOnline = functions.database.ref('/devices/{deviceId}')
+  .onUpdate(async (change, context) => {
+    const after = change.after.val();
+    if (!after) return null;
+
+    const deviceId = context.params.deviceId;
+    
+    // Skip if this is just the isOnline field being updated
+    const beforeIsOnline = change.before.val()?.isOnline;
+    const afterIsOnline = after.isOnline;
+    
+    // Check if there are changes other than isOnline/lastChecked
+    const beforeKeys = Object.keys(change.before.val() || {}).filter(k => k !== 'isOnline' && k !== 'lastChecked').sort();
+    const afterKeys = Object.keys(after).filter(k => k !== 'isOnline' && k !== 'lastChecked').sort();
+    const hasDataChanges = beforeKeys.length !== afterKeys.length || beforeKeys.some((k, i) => k !== afterKeys[i]);
+
+    if (!hasDataChanges && beforeIsOnline === afterIsOnline) {
+      return null; // No actual data changes, skip
+    }
+
+    // Device sent new data, mark as online
+    const now = Date.now();
+    await rtdb.ref(`/devices/${deviceId}`).update({
+      isOnline: true,
+      lastSeen: after.lastSeen || after.timestamp || now
+    });
+
+    return null;
+  });

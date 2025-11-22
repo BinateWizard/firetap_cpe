@@ -33,8 +33,11 @@ function determineStatus(data, isOnline = true) {
   if (data.lastType === 'alarm') return 'Alert';
   const gas = toStr(data.gasStatus);
   if (['critical','detected'].includes(gas)) return 'Alert';
-  const smokeValue = data.smokeLevel ?? data.smoke ?? data.smokeAnalog ?? 0;
-  if (typeof smokeValue === 'number' && smokeValue > 1500) return 'Alert';
+  // Smoke status: rely on digital flags (smokeDetected / mq2_do.smokeDetected)
+  const smokeDetectedFlag =
+    data.smokeDetected === true ||
+    (data.mq2_do && data.mq2_do.smokeDetected === true);
+  if (smokeDetectedFlag) return 'Alert';
   return 'Safe';
 }
 
@@ -82,15 +85,35 @@ export function useDeviceController(deviceIdRef) {
         else if (buttonEventState === 'STATE_SPRINKLER') buttonMessage = 'sprinkler activated';
 
         const dhtNode = data.dht || {};
+        const mq2DoNode = data.mq2_do || {};
         let currentTemp = data.temperature;
         let currentHumidity = data.humidity;
         if (currentTemp === undefined && dhtNode.temperature !== undefined) currentTemp = dhtNode.temperature;
         if (currentHumidity === undefined && dhtNode.humidity !== undefined) currentHumidity = dhtNode.humidity;
 
+        // Normalize smoke reading and detection flags for different schemas (legacy vs DEVICE_010)
+        const rawSmokeAnalog =
+          data.smokeLevel ||
+          data.smoke ||
+          data.smokeAnalog ||
+          data.mq2 ||
+          0;
+        const smokeDetected =
+          data.smokeDetected === true ||
+          mq2DoNode.smokeDetected === true;
+
         const currentData = {
           id: Date.now(),
-          dateTime: buttonStatus.lastEventAt ? new Date(buttonStatus.lastEventAt) : (data.lastSeen ? new Date(data.lastSeen) : (dhtNode.timestamp ? new Date(dhtNode.timestamp) : (data.timestamp ? new Date(data.timestamp) : new Date()))),
-          smokeAnalog: data.smokeLevel || data.smoke || data.smokeAnalog || 0,
+          dateTime: buttonStatus.lastEventAt
+            ? new Date(buttonStatus.lastEventAt)
+            : (data.lastSeen
+              ? new Date(data.lastSeen)
+              : (dhtNode.timestamp
+                ? new Date(dhtNode.timestamp)
+                : (mq2DoNode.timestamp
+                  ? new Date(mq2DoNode.timestamp)
+                  : (data.timestamp ? new Date(data.timestamp) : new Date())))),
+          smokeAnalog: rawSmokeAnalog,
           gasStatus: data.gasStatus || 'normal',
           temperature: currentTemp,
           humidity: currentHumidity,
@@ -100,8 +123,13 @@ export function useDeviceController(deviceIdRef) {
           buttonEvent: buttonEventState,
           buttonState,
           lastType: data.lastType,
+<<<<<<< HEAD
           isOnline: isOnline,
           status: determineStatusFromButton(data, buttonEventState, isOnline)
+=======
+          smokeDetected,
+          status: determineStatusFromButton(data, buttonEventState)
+>>>>>>> 655ab21dd9b53b87bf3ae2c00bd69e56c111157c
         };
 
         latest.value = currentData;
@@ -114,7 +142,7 @@ export function useDeviceController(deviceIdRef) {
           const arr = Object.entries(data.readings).map(([key, value]) => ({
             id: key,
             dateTime: value.lastSeen ? new Date(value.lastSeen) : (value.timestamp ? new Date(value.timestamp) : new Date()),
-            smokeAnalog: value.smokeLevel || value.smoke || value.smokeAnalog || 0,
+            smokeAnalog: value.smokeLevel || value.smoke || value.smokeAnalog || value.mq2 || 0,
             gasStatus: value.gasStatus || 'normal',
             temperature: value.temperature,
             humidity: value.humidity,
