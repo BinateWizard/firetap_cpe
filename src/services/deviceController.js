@@ -123,13 +123,9 @@ export function useDeviceController(deviceIdRef) {
           buttonEvent: buttonEventState,
           buttonState,
           lastType: data.lastType,
-<<<<<<< HEAD
-          isOnline: isOnline,
-          status: determineStatusFromButton(data, buttonEventState, isOnline)
-=======
-          smokeDetected,
-          status: determineStatusFromButton(data, buttonEventState)
->>>>>>> 655ab21dd9b53b87bf3ae2c00bd69e56c111157c
+            isOnline: isOnline,
+            smokeDetected,
+            status: determineStatusFromButton(data, buttonEventState, isOnline)
         };
 
         latest.value = currentData;
