@@ -3,7 +3,29 @@ import { ref as dbRef, onValue, query, orderByChild, limitToLast } from 'firebas
 import { rtdb } from '@/firebase';
 import { stopAllAlerts } from '@/services/alertMonitor';
 
-function determineStatus(data) {
+function checkDeviceOnline(data) {
+  // Priority 1: Check backend-set isOnline field (from Cloud Functions)
+  if (data.isOnline !== undefined) {
+    return data.isOnline;
+  }
+  
+  // Priority 2: Client-side fallback - check lastSeen timestamp
+  const OFFLINE_THRESHOLD = 2 * 60 * 1000; // 2 minutes (same as backend)
+  const lastSeen = data.lastSeen || data.timestamp || (data.dht?.timestamp) || (data.status?.lastEventAt) || 0;
+  
+  if (lastSeen === 0) {
+    return false; // No timestamp at all = offline
+  }
+  
+  const now = Date.now();
+  const timeSinceLastSeen = now - lastSeen;
+  
+  return timeSinceLastSeen < OFFLINE_THRESHOLD;
+}
+
+function determineStatus(data, isOnline = true) {
+  // Always prioritize offline status
+  if (!isOnline) return 'Offline';
   if (!data || typeof data !== 'object') return 'Safe';
   const toStr = v => String(v || '').toLowerCase();
   if (data.sensorError === true) return 'Alert';
@@ -16,10 +38,12 @@ function determineStatus(data) {
   return 'Safe';
 }
 
-function determineStatusFromButton(data, buttonEvent) {
+function determineStatusFromButton(data, buttonEvent, isOnline = true) {
+  // Always prioritize offline status
+  if (!isOnline) return 'Offline';
   if (buttonEvent === 'STATE_ALERT') return 'Alert';
   if (buttonEvent === 'STATE_SPRINKLER') return 'Safe';
-  return determineStatus(data);
+  return determineStatus(data, isOnline);
 }
 
 export function useDeviceController(deviceIdRef) {
@@ -41,6 +65,10 @@ export function useDeviceController(deviceIdRef) {
     mainUnsub = onValue(deviceDataRef, snapshot => {
       if (snapshot.exists()) {
         const data = snapshot.val();
+        
+        // Check if device is online (backend field or client-side fallback)
+        const isOnline = checkDeviceOnline(data);
+        
         const sensorErrorFlag = (data.sensorError === true);
         const sprinklerActiveFlag = (data.sprinklerActive === true);
         const buttonStatus = data.status || {};
@@ -72,7 +100,8 @@ export function useDeviceController(deviceIdRef) {
           buttonEvent: buttonEventState,
           buttonState,
           lastType: data.lastType,
-          status: determineStatusFromButton(data, buttonEventState)
+          isOnline: isOnline,
+          status: determineStatusFromButton(data, buttonEventState, isOnline)
         };
 
         latest.value = currentData;
@@ -91,7 +120,7 @@ export function useDeviceController(deviceIdRef) {
             humidity: value.humidity,
             message: value.message || (value.sensorError === true ? 'Sensor Error' : ''),
             sensorError: value.sensorError === true,
-            status: determineStatus(value)
+            status: determineStatus(value, isOnline)
           })).sort((a,b) => b.dateTime - a.dateTime).slice(0,200);
           history.value = arr;
         } else {
